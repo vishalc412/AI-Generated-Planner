@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  # MongoDB
+  mongodb:
+    image: mongo:7.0
+    container_name: taskplanner-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: admin123
+      MONGO_INITDB_DATABASE: task_planner
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - taskplanner-network
+
+  # Redis (for caching and task queue)
+  redis:
+    image: redis:7-alpine
+    container_name: taskplanner-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - taskplanner-network
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: taskplanner-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URL=mongodb://admin:admin123@mongodb:27017
+      - MONGODB_DB_NAME=task_planner
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=your-secret-key-change-in-production
+      - DEBUG=True
+    depends_on:
+      - mongodb
+      - redis
+    volumes:
+      - ./backend:/app
+    networks:
+      - taskplanner-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: taskplanner-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - taskplanner-network
+
+volumes:
+  mongodb_data:
+  redis_data:
+
+networks:
+  taskplanner-network:
+    driver: bridge
