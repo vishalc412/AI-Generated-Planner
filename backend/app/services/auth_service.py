@@ -3,13 +3,16 @@ from typing import Optional
 from google.auth.transport import requests
 from google.oauth2 import id_token
 import httpx
-import jwt as pyjwt
+import jwt
 from bson import ObjectId
+import logging
 
 from app.core import get_database, create_access_token, create_refresh_token
 from app.core.config import settings
 from app.models.user import User
 from app.schemas.user import UserCreate, Token
+
+logger = logging.getLogger(__name__)
 
 
 class AuthService:
@@ -18,6 +21,10 @@ class AuthService:
 
     async def verify_google_token(self, token: str) -> Optional[dict]:
         """Verify Google OAuth token"""
+        if not settings.GOOGLE_CLIENT_ID:
+            logger.error("Google OAuth not configured")
+            return None
+
         try:
             idinfo = id_token.verify_oauth2_token(
                 token,
@@ -26,7 +33,8 @@ class AuthService:
             )
 
             if idinfo['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
-                raise ValueError('Wrong issuer.')
+                logger.warning("Invalid Google token issuer")
+                return None
 
             return {
                 'email': idinfo['email'],
@@ -35,32 +43,33 @@ class AuthService:
                 'google_id': idinfo['sub']
             }
         except Exception as e:
-            print(f"Error verifying Google token: {e}")
+            logger.error(f"Error verifying Google token: {e}")
             return None
 
     async def verify_apple_token(self, token: str) -> Optional[dict]:
         """Verify Apple OAuth token"""
-        try:
-            # Decode the token header to get the key id
-            header = pyjwt.get_unverified_header(token)
+        if not settings.APPLE_CLIENT_ID:
+            logger.error("Apple OAuth not configured")
+            return None
 
-            # Fetch Apple's public keys
+        try:
+            header = jwt.get_unverified_header(token)
+
             async with httpx.AsyncClient() as client:
                 response = await client.get('https://appleid.apple.com/auth/keys')
                 keys = response.json()['keys']
 
-            # Find the matching key
             public_key = None
             for key in keys:
                 if key['kid'] == header['kid']:
-                    public_key = pyjwt.algorithms.RSAAlgorithm.from_jwk(key)
+                    public_key = jwt.algorithms.RSAAlgorithm.from_jwk(key)
                     break
 
             if not public_key:
+                logger.warning("No matching Apple public key found")
                 return None
 
-            # Verify the token
-            payload = pyjwt.decode(
+            payload = jwt.decode(
                 token,
                 public_key,
                 audience=settings.APPLE_CLIENT_ID,
@@ -72,7 +81,7 @@ class AuthService:
                 'apple_id': payload['sub']
             }
         except Exception as e:
-            print(f"Error verifying Apple token: {e}")
+            logger.error(f"Error verifying Apple token: {e}")
             return None
 
     async def get_or_create_user(self, user_data: dict, provider: str) -> User:
@@ -128,12 +137,16 @@ class AuthService:
         )
 
     async def get_user_by_id(self, user_id: str) -> Optional[User]:
-        """Get user by ID"""
+        """Get user by ID with validation"""
         try:
+            if not ObjectId.is_valid(user_id):
+                logger.warning(f"Invalid user ID: {user_id}")
+                return None
+
             user_doc = await self.db.users.find_one({'_id': ObjectId(user_id)})
             if user_doc:
                 return User(**user_doc)
             return None
         except Exception as e:
-            print(f"Error getting user: {e}")
+            logger.error(f"Error getting user: {e}")
             return None

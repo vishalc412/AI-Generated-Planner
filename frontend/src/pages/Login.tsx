@@ -33,7 +33,7 @@ const Login: React.FC = () => {
     try {
       await login(credentialResponse.credential, 'google');
       toast.success('Successfully logged in!');
-      navigate('/dashboard');
+      // Navigation handled by useEffect when isAuthenticated changes
     } catch (error) {
       toast.error('Failed to login with Google');
       console.error('Google login error:', error);
@@ -46,10 +46,14 @@ const Login: React.FC = () => {
 
   const handleAppleLogin = async () => {
     try {
+      if (!window.AppleID) {
+        toast.error('Apple Sign In not available');
+        return;
+      }
       const data = await window.AppleID.auth.signIn();
       await login(data.authorization.id_token, 'apple');
       toast.success('Successfully logged in!');
-      navigate('/dashboard');
+      // Navigation handled by useEffect when isAuthenticated changes
     } catch (error) {
       toast.error('Failed to login with Apple');
       console.error('Apple login error:', error);

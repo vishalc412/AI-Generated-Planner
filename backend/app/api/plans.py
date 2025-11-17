@@ -133,35 +133,42 @@ async def upload_plan_image(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user)
 ):
-    """Upload an image to a plan"""
+    """Upload an image to a plan (requires S3 configuration)"""
+    # Check if S3 is configured
+    if not all([settings.AWS_ACCESS_KEY_ID, settings.AWS_SECRET_ACCESS_KEY, settings.AWS_S3_BUCKET]):
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Image upload not configured. Set AWS S3 credentials in environment."
+        )
+
     # Validate file type
     if file.content_type not in settings.ALLOWED_IMAGE_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file type. Only images are allowed."
+            detail="Invalid file type. Only JPEG, PNG, GIF, and WebP images allowed."
         )
 
-    # Read file
+    # Read and validate file size
     contents = await file.read()
     file_size = len(contents)
 
     if file_size > settings.MAX_UPLOAD_SIZE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File size exceeds maximum allowed size"
+            detail=f"File too large. Maximum size is {settings.MAX_UPLOAD_SIZE / 1024 / 1024}MB"
         )
 
-    # Upload to S3
-    s3_client = boto3.client(
-        's3',
-        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-        region_name=settings.AWS_REGION
-    )
-
-    file_key = f"plans/{plan_id}/{uuid.uuid4()}-{file.filename}"
-
     try:
+        # Create S3 client
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            region_name=settings.AWS_REGION
+        )
+
+        # Upload to S3
+        file_key = f"plans/{plan_id}/{uuid.uuid4()}-{file.filename}"
         s3_client.put_object(
             Bucket=settings.AWS_S3_BUCKET,
             Key=file_key,
@@ -171,7 +178,7 @@ async def upload_plan_image(
 
         file_url = f"https://{settings.AWS_S3_BUCKET}.s3.{settings.AWS_REGION}.amazonaws.com/{file_key}"
 
-        # Create image attachment
+        # Save to database
         image = ImageAttachment(
             url=file_url,
             filename=file.filename,
@@ -179,7 +186,6 @@ async def upload_plan_image(
             uploaded_at=datetime.utcnow()
         )
 
-        # Add image to plan
         plan_service = PlanService()
         plan = await plan_service.add_image_to_plan(plan_id, str(current_user.id), image)
 
@@ -195,8 +201,10 @@ async def upload_plan_image(
 
         return PlanResponse(**plan_dict)
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload image: {str(e)}"
+            detail=f"Upload failed: {str(e)}"
         )
