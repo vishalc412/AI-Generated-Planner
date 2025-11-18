@@ -1,5 +1,3 @@
-# TaskPlanner Docker Compose - Development Mode
-# For production, use: docker-compose -f docker-compose.prod.yml up
 version: '3.8'
 
 services:
@@ -60,8 +58,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      # Mount code for hot reload in development
+      - ./backend/app:/app/app
     networks:
       - taskplanner-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
     build:
